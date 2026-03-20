@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+temp_*.wav
+uploads/
+.pytest_cache/
+
+# Node
+node_modules/
+.next/
+out/
+build/
+.DS_Store
+*.local
+
+# IDE
+.vscode/
+.idea/
+.gemini/
+*.swp
+*.swo

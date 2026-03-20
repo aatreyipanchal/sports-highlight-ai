@@ -1,0 +1,15 @@
+ultralytics==8.2.103
+torch>=2.1.0
+torchvision>=0.16.0
+opencv-python>=4.8.0.76
+numpy>=1.24.0
+easyocr>=1.7.1
+pyyaml>=6.0.1
+moviepy>=1.0.3
+proglog>=0.1.10
+fastapi
+uvicorn
+librosa
+transformers
+python-multipart
+scipy

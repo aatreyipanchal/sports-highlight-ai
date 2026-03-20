@@ -1,0 +1,221 @@
+import os
+import numpy as np
+import librosa
+import cv2
+from moviepy import VideoFileClip
+from transformers import BlipProcessor, BlipForConditionalGeneration, CLIPProcessor, CLIPModel
+import torch
+from PIL import Image
+
+# Load models once
+print("Loading Elite AI Models...")
+blip_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+# Contrastive Prompts
+EXCITEMENT_PROMPTS = [
+    "a spectacular goal or point in a sports match", # 0
+    "players celebrating a major victory or score", # 1
+    "an incredible action move in sports", # 2
+    "a crowd explosion of cheering", # 3
+    "a boring static view of a sports field", # 4 (Boring)
+    "nothing special happening in the game", # 5 (Boring)
+    "a person standing around doing nothing", # 6 (Boring)
+    "an uninteresting background shot" # 7 (Boring)
+]
+
+def get_clip_margin(frame):
+    """
+    Returns (Margin, is_score_likely)
+    Margin = Total Excitement Probs - Total Boring Probs
+    """
+    img = Image.fromarray(frame).convert("RGB")
+    inputs = clip_processor(text=EXCITEMENT_PROMPTS, images=img, return_tensors="pt", padding=True)
+    with torch.no_grad():
+        outputs = clip_model(**inputs)
+    probs = outputs.logits_per_image.softmax(dim=1).flatten()
+    
+    excitement_sum = float(torch.sum(probs[:4]))
+    boring_sum = float(torch.sum(probs[4:]))
+    
+    margin = excitement_sum - boring_sum
+    # Potential Score if Margin > 0.3 AND 'Goal/Score' prompts are high
+    is_score = margin > 0.4 and float(torch.sum(probs[:2])) > 0.25
+    
+    return margin, is_score
+
+def get_audio_explosiveness(video_path):
+    """
+    Analyzes audio for sudden 'explosive' energy growth.
+    Returns per-second mapping of energy growth rate (explosiveness).
+    """
+    temp_wav = "temp_explosive.wav"
+    video_clip = VideoFileClip(video_path)
+    if not video_clip.audio: return {}
+    
+    video_clip.audio.write_audiofile(temp_wav, fps=22050, logger=None)
+    y, sr = librosa.load(temp_wav, sr=None)
+    os.remove(temp_wav)
+    
+    hop_length = 512
+    energy = librosa.feature.rms(y=y, hop_length=hop_length)[0]
+    # Normalize energy [0, 1]
+    energy = (energy - np.min(energy)) / (np.max(energy) - np.min(energy) + 1e-6)
+    
+    # Calculate energy derivative (explosiveness)
+    explosiveness = np.diff(energy, prepend=0)
+    # Filter for positive spikes
+    explosiveness = np.maximum(0, explosiveness)
+    
+    # Map to seconds
+    times = librosa.frames_to_time(np.arange(len(energy)), sr=sr, hop_length=hop_length)
+    audio_profile = {round(t, 1): float(e) for t, e in zip(times, energy)}
+    explosive_profile = {round(t, 1): float(ex) for t, ex in zip(times, explosiveness)}
+    
+    return audio_profile, explosive_profile
+
+def get_motion_score(frame, prev_gray):
+    """Calculates motion intensity relative to previous frame."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (21, 21), 0)
+    
+    if prev_gray is None:
+        return 0, gray
+    
+    delta = cv2.absdiff(prev_gray, gray)
+    thresh = cv2.threshold(delta, 25, 255, cv2.THRESH_BINARY)[1]
+    motion_energy = np.sum(thresh) / float(frame.shape[0] * frame.shape[1] * 255)
+    return motion_energy, gray
+
+def detect_highlights_extreme(video_path, window_step=0.5):
+    """
+    Weighted Multi-factor Engine (Margin + Audio + Motion).
+    Extreme Accuracy Logic.
+    """
+    print(f"--- Extreme Accuracy Analysis: {video_path} ---")
+    video_clip = VideoFileClip(video_path)
+    duration = video_clip.duration
+    
+    # 1. Pre-analyze Audio
+    audio_norm, audio_explosiveness = get_audio_explosiveness(video_path)
+    
+    candidates = []
+    prev_gray = None
+    
+    # 2. Main High-Res Scan
+    for t in np.arange(0, duration, window_step):
+        frame = video_clip.get_frame(t)
+        
+        # Factor A: CLIP Margin
+        margin, is_score = get_clip_margin(frame)
+        
+        # Factor B: Audio Energy (interpolated)
+        t_key = round(t, 1)
+        audio_val = audio_norm.get(t_key, 0)
+        explosive_val = audio_explosiveness.get(t_key, 0)
+        
+        # Factor C: Motion Intensity
+        motion_val, prev_gray = get_motion_score(frame, prev_gray)
+        
+        # WEIGHTED RANKING
+        # 60% CLIP + 20% Audio + 20% Motion
+        # We also boost if audio is 'explosive'
+        composite_score = (0.6 * margin) + (0.2 * audio_val) + (0.2 * motion_val)
+        if explosive_val > 0.05: composite_score += 0.15 # Audio explosion bonus
+        
+        print(f"T={t:.1f}s | Margin: {margin:.2f} | Audio: {audio_val:.2f} | Motion: {motion_val:.2f} | Final: {composite_score:.2f}")
+        
+        # Strict Threshold for 'Extreme Accuracy'
+        if composite_score > 0.45:
+            candidates.append({'time': t, 'score': composite_score, 'is_score': is_score})
+            
+    # 3. Semantic Segment Formation
+    segments = []
+    if not candidates: return []
+    
+    current_seg = {
+        'start': candidates[0]['time'], 
+        'end': candidates[0]['time'] + window_step, 
+        'max_score': candidates[0]['score'],
+        'has_score': candidates[0]['is_score']
+    }
+    
+    for i in range(1, len(candidates)):
+        c = candidates[i]
+        # Only merge if contiguous and same scoring status
+        if (c['time'] - current_seg['end'] < 0.6) and (c['is_score'] == current_seg['has_score']):
+            current_seg['end'] = c['time'] + window_step
+            current_seg['max_score'] = max(current_seg['max_score'], c['score'])
+        else:
+            segments.append(current_seg)
+            current_seg = {
+                'start': c['time'], 
+                'end': c['time'] + window_step, 
+                'max_score': c['score'],
+                'has_score': c['is_score']
+            }
+    segments.append(current_seg)
+    video_clip.close()
+    
+    # 4. Filter and Prioritize
+    final_segments = []
+    for s in segments:
+        duration_s = s['end'] - s['start']
+        label = "POINT/SCORE!" if s['has_score'] else "HIGHLIGHT"
+        
+        if duration_s >= 1.0:
+            final_segments.append({**s, 'score': s['max_score'], 'label': label})
+            
+    # Priority: Scores first
+    final_segments.sort(key=lambda x: (x['label'] == "POINT/SCORE!", x['score']), reverse=True)
+    return final_segments[:10]
+
+def generate_description(video_path, start_time, end_time, label=None):
+    """Elite Description Logic."""
+    clip = VideoFileClip(video_path)
+    # Check 3 points for better description accuracy
+    test_points = [start_time + 0.5, (start_time + end_time) / 2, end_time - 0.5]
+    best_frame = None
+    best_conf = -1
+    
+    if label is None:
+        # For manual time frames, find the best frame in a small 3s window around it
+        label = "HIGHLIGHT"
+        for tp in test_points:
+            if 0 <= tp <= clip.duration:
+                f = clip.get_frame(tp)
+                margin, is_score = get_clip_margin(f)
+                if margin > best_conf:
+                    best_conf = margin
+                    best_frame = f
+                    if is_score: label = "POINT/SCORE!"
+    else:
+        best_frame = clip.get_frame((start_time + end_time) / 2)
+        
+    img = Image.fromarray(best_frame).convert("RGB")
+    inputs = blip_processor(img, return_tensors="pt")
+    out = blip_model.generate(**inputs, max_new_tokens=25)
+    description = blip_processor.decode(out[0], skip_special_tokens=True).strip()
+    
+    clip.close()
+    if label == "POINT/SCORE!":
+        return f"SCORE! {description}"
+    return description
+
+def process_video_pipeline(video_path):
+    """Elite multi-factor pipeline."""
+    segments = detect_highlights_extreme(video_path)
+    results = []
+    for i, seg in enumerate(segments):
+        description = generate_description(video_path, seg['start'], seg['end'], seg['label'])
+        results.append({
+            'id': i + 1,
+            'start': round(seg['start'], 2),
+            'end': round(seg['end'], 2),
+            'description': description,
+            'score': round(seg['score'], 4),
+            'label': seg['label']
+        })
+    return results
