@@ -23,8 +23,10 @@ export default function Home() {
     const formData = new FormData();
     formData.append("file", selectedFile);
 
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
     try {
-      const res = await fetch("http://localhost:8000/upload", {
+      const res = await fetch(`${apiUrl}/upload`, {
         method: "POST",
         body: formData,
       });
@@ -33,7 +35,7 @@ export default function Home() {
       setFilePath(data.file_path);
       
       // Auto-trigger highlights
-      const hRes = await fetch(`http://localhost:8000/highlights/${data.file_id}`);
+      const hRes = await fetch(`${apiUrl}/highlights/${data.file_id}`);
       const hData = await hRes.json();
       setHighlights(hData.highlights);
     } catch (err) {
@@ -53,8 +55,10 @@ export default function Home() {
     else if (parts.length === 2) seconds = parts[0] * 60 + parts[1];
     else seconds = parts[0];
 
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
     try {
-      const res = await fetch("http://localhost:8000/describe", {
+      const res = await fetch(`${apiUrl}/describe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -135,7 +139,7 @@ export default function Home() {
                   <video 
                     controls 
                     className="w-full h-full object-cover"
-                    src={`http://localhost:8000/videos/${fileId}${file?.name.substring(file.name.lastIndexOf('.'))}`}
+                    src={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/videos/${fileId}${file?.name.substring(file.name.lastIndexOf('.'))}`}
                   />
                 ) : (
                   <div className="w-full h-full flex flex-col items-center justify-center text-neutral-600">

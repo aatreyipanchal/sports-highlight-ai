@@ -7,7 +7,10 @@ import shutil
 import uuid
 from .processor import process_video_pipeline, generate_description
 
-app = FastAPI(title="Sports Highlight API")
+app = FastAPI(title="Sports Highlight AI Engine")
+
+# Load configuration from environment
+ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
 
 # Mount uploads directory for video playback
 app.mount("/videos", StaticFiles(directory="uploads"), name="videos")
@@ -15,7 +18,8 @@ app.mount("/videos", StaticFiles(directory="uploads"), name="videos")
 # Enable CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, restrict this
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
