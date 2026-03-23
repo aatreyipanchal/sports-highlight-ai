@@ -22,12 +22,23 @@ def st_cache_resource(func):
 @st_cache_resource
 def get_models():
     """Load and cache all models."""
-    print("Loading AI Models...")
-    blip_p = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-    blip_m = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+    print("Loading AI Models (Advanced Captions)...")
+    blip_p = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-large")
+    blip_m = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-large")
     clip_m = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
     clip_p = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     return blip_p, blip_m, clip_m, clip_p
+
+# Sports Event Specific Prompts for Contextual AI
+EVENT_PROMPTS = [
+    "a goal being scored in a soccer match",
+    "a goalkeeper making a spectacular save",
+    "players celebrating a point or victory",
+    "a tense moment near the goal line",
+    "a player dribbling or running with the ball",
+    "a foul or a tackle occurring",
+    "fans cheering wildly in the stands"
+]
 
 # Pre-load or rely on lazy loading
 # blip_processor, blip_model, clip_model, clip_processor = get_models()
@@ -177,35 +188,53 @@ def detect_highlights_extreme(video_path, window_step=0.5, progress_callback=Non
     return final_segments[:10]
 
 def generate_description(video_path, start_time, end_time, label=None):
-    """Generate high-quality description using BLIP."""
+    """Elite AI Description Logic using BLIP-Large and CLIP-Context."""
     blip_p, blip_m, clip_m, clip_p = get_models()
     
     clip = VideoFileClip(video_path)
+    # Check 3 points across the segment for best representation
     test_points = [start_time + 0.5, (start_time + end_time) / 2, end_time - 0.5]
     best_frame = None
     best_conf = -1
+    best_event = "an exciting sports moment"
     
-    if label is None:
-        label = "HIGHLIGHT"
-        for tp in test_points:
-            if 0 <= tp <= clip.duration:
-                f = clip.get_frame(tp)
-                margin, is_score = get_clip_margin(f, clip_m, clip_p)
-                if margin > best_conf:
-                    best_conf = margin
-                    best_frame = f
-                    if is_score: label = "POINT/SCORE!"
-    else:
-        best_frame = clip.get_frame((start_time + end_time) / 2)
-        
+    # 1. Identify the best frame and specific event context using CLIP
+    for tp in test_points:
+        if 0 <= tp <= clip.duration:
+            f = clip.get_frame(tp)
+            img = Image.fromarray(f).convert("RGB")
+            
+            # Use specific Event Prompts for better context
+            inputs = clip_p(text=EVENT_PROMPTS, images=img, return_tensors="pt", padding=True)
+            with torch.no_grad():
+                out = clip_m(**inputs)
+            probs = out.logits_per_image.softmax(dim=1).flatten()
+            
+            conf = float(torch.max(probs))
+            if conf > best_conf:
+                best_conf = conf
+                best_frame = f
+                # Map back to event text
+                best_event = EVENT_PROMPTS[int(torch.argmax(probs))]
+
+    # 2. Use BLIP-Large with a "Guided Prefix" based on the detected event
+    prompt = f"a sports match highlight reel showing {best_event} and"
     img = Image.fromarray(best_frame).convert("RGB")
-    inputs = blip_p(img, return_tensors="pt")
-    out = blip_m.generate(**inputs, max_new_tokens=25)
+    inputs = blip_p(img, prompt, return_tensors="pt")
+    
+    with torch.no_grad():
+        out = blip_m.generate(**inputs, max_new_tokens=30, do_sample=True, top_k=50)
+    
     description = blip_p.decode(out[0], skip_special_tokens=True).strip()
     
+    # clean up prefix if it duplicated
+    if description.startswith(prompt):
+        description = description[len(prompt):].strip()
+        description = f"{best_event.capitalize()}, {description}"
+    
     clip.close()
-    if label == "POINT/SCORE!":
-        return f"SCORE! {description}"
+    if label == "POINT/SCORE!" and "goal" not in description.lower():
+         return f"GOAL! {description}"
     return description
 
 def process_video_pipeline(video_path, progress_callback=None):
