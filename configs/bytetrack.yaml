@@ -1,8 +1,0 @@
-# Minimal ByteTrack config for Ultralytics tracker API
-tracker_type: bytetrack
-track_high_thresh: 0.5
-track_low_thresh: 0.1
-new_track_thresh: 0.7
-match_thresh: 0.8
-lost_track_buffer: 30
-frame_rate: 30
