@@ -91,7 +91,6 @@ def generate_highlights(video_path, segments, output_path="outputs/highlights.mp
 
 def main():
     parser = argparse.ArgumentParser(description="Generate sports highlights from video and text descriptions.")
-    parser.get_all_command_line_args = lambda: None # placeholder
     
     parser.add_argument("--video", type=str, required=True, help="Path to input video file")
     parser.add_argument("--text", type=str, help="Text description of highlights")
